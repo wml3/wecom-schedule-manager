@@ -148,6 +148,29 @@ py -m pip install requests
 - [API 场景映射](./references/api-scenarios.md)
 - [审计模型](./references/audit-model.md)
 
+## 发布版本
+
+仓库内已经内置了一个 UTF-8 安全的 GitHub 发版脚本，用来避免中文 release note 在 Windows / PowerShell 下乱码。
+
+发布前准备：
+
+- 配置环境变量 `GITHUB_TOKEN`
+- 在 `assets/release-notes/` 下准备一个 UTF-8 编码的 release note 文件
+
+推荐命令：
+
+```bash
+python scripts/publish_github_release.py --version v1.0.2 --notes-file assets/release-notes/release-note-template.md
+```
+
+这个脚本会自动处理：
+
+- 失效代理环境变量清理
+- 推送目标分支
+- 创建或更新 tag
+- 创建或更新 GitHub Release
+- 以 UTF-8 正确写入中文 release note
+
 ## 适合谁使用
 
 适合：
