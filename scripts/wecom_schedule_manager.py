@@ -146,6 +146,7 @@ class WeComClient:
         self.agent_id = int(agent_id)
         self.audit = audit
         self._access_token: Optional[str] = None
+        self._directory_cache: Dict[str, Dict[str, Any]] = {}
         self.session = requests.Session()
         self.headers = {"Content-Type": "application/json"}
 
@@ -211,12 +212,155 @@ class WeComClient:
         params.update(extra)
         return params
 
+    def list_departments(self, department_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        params = self._authed_params()
+        if department_id is not None:
+            params["id"] = department_id
+        payload = self._request("GET", "/department/list", params=params)
+        return payload.get("department") or []
+
+    def list_department_users(self, department_id: int) -> List[Dict[str, Any]]:
+        payload = self._request(
+            "GET",
+            "/user/simplelist",
+            params=self._authed_params(department_id=department_id, fetch_child=0),
+        )
+        return payload.get("userlist") or []
+
+    @staticmethod
+    def _normalize_name(name: str) -> str:
+        return re.sub(r"\s+", "", name).casefold()
+
+    def _build_visible_user_index(self, department_id: Optional[int]) -> Dict[str, Any]:
+        cache_key = str(department_id) if department_id is not None else "visible"
+        cached = self._directory_cache.get(cache_key)
+        if cached:
+            return cached
+
+        departments = self.list_departments(department_id=department_id)
+        if departments:
+            department_ids = sorted({int(item["id"]) for item in departments if item.get("id") is not None})
+        elif department_id is not None:
+            department_ids = [department_id]
+        else:
+            department_ids = [1]
+
+        department_name_map = {
+            int(item["id"]): item.get("name")
+            for item in departments
+            if item.get("id") is not None
+        }
+        users_by_userid: Dict[str, Dict[str, Any]] = {}
+
+        for current_department_id in department_ids:
+            for item in self.list_department_users(current_department_id):
+                userid = item.get("userid")
+                if not userid:
+                    continue
+                entry = users_by_userid.setdefault(
+                    userid,
+                    {
+                        "userid": userid,
+                        "name": item.get("name"),
+                        "department_ids": [],
+                    },
+                )
+                for dept_id in item.get("department") or [current_department_id]:
+                    if dept_id not in entry["department_ids"]:
+                        entry["department_ids"].append(dept_id)
+
+        name_index: Dict[str, List[Dict[str, Any]]] = {}
+        for entry in users_by_userid.values():
+            normalized = self._normalize_name(entry.get("name") or "")
+            if not normalized:
+                continue
+            entry["department_names"] = [
+                department_name_map.get(dept_id, str(dept_id))
+                for dept_id in entry["department_ids"]
+            ]
+            name_index.setdefault(normalized, []).append(entry)
+
+        directory = {
+            "department_ids": department_ids,
+            "department_count": len(department_ids),
+            "user_count": len(users_by_userid),
+            "name_index": name_index,
+        }
+        self._directory_cache[cache_key] = directory
+        return directory
+
+    def resolve_user_by_name(self, name: str, department_id: Optional[int] = None) -> Dict[str, Any]:
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise SystemExit("按姓名解析时，姓名不能为空。")
+
+        directory = self._build_visible_user_index(department_id=department_id)
+        matches = directory["name_index"].get(self._normalize_name(clean_name), [])
+        match_summary = [
+            {
+                "userid": item["userid"],
+                "name": item.get("name"),
+                "department_ids": item.get("department_ids") or [],
+                "department_names": item.get("department_names") or [],
+            }
+            for item in matches
+        ]
+
+        self.audit.append(
+            "user.resolve.name",
+            {
+                "lookup_mode": "name",
+                "lookup_value": clean_name,
+                "department_id": department_id,
+                "searched_department_count": directory["department_count"],
+                "searched_user_count": directory["user_count"],
+                "match_count": len(matches),
+                "matches": match_summary,
+            },
+        )
+
+        if not matches:
+            scope_hint = f"部门 {department_id}" if department_id is not None else "当前应用可见范围"
+            raise SystemExit(
+                f"未在{scope_hint}内找到姓名精确匹配的企业微信成员：{clean_name}。"
+                " 请确认应用可见范围、通讯录权限，或改用 userid / 手机号 / 邮箱。"
+            )
+        if len(matches) > 1:
+            candidates = "；".join(
+                f"{item['userid']}（{'/'.join(item.get('department_names') or [str(x) for x in item.get('department_ids') or []])}）"
+                for item in matches
+            )
+            raise SystemExit(
+                f"姓名解析出现重名，无法自动判断：{clean_name}。候选项：{candidates}。"
+                " 请改用 userid / 手机号 / 邮箱，或通过 --name-department-id 缩小部门范围。"
+            )
+
+        resolved_userid = matches[0]["userid"]
+        detail = self._request(
+            "GET",
+            "/user/get",
+            params=self._authed_params(userid=resolved_userid),
+            audit_event="user.resolve.detail",
+            audit_detail={"lookup_mode": "name", "resolved_userid": resolved_userid},
+        )
+        return {
+            "lookup_mode": "name",
+            "lookup_value": clean_name,
+            "userid": detail.get("userid"),
+            "name": detail.get("name"),
+            "department": detail.get("department"),
+            "status": detail.get("status"),
+            "raw": detail,
+        }
+
     def resolve_user(
         self,
         *,
         user_id: Optional[str],
         mobile: Optional[str],
         email: Optional[str],
+        name: Optional[str],
+        name_department_id: Optional[int],
     ) -> Dict[str, Any]:
         if user_id:
             detail = self._request(
@@ -287,7 +431,9 @@ class WeComClient:
                 "status": detail.get("status"),
                 "raw": detail,
             }
-        raise SystemExit("请至少提供一种用户标识：--user-id、--mobile 或 --email，以便完成可审计的用户解析。")
+        if name:
+            return self.resolve_user_by_name(name=name, department_id=name_department_id)
+        raise SystemExit("请至少提供一种用户标识：--user-id、--mobile、--email 或 --name，以便完成可审计的用户解析。")
 
     def create_calendar(
         self,
@@ -418,6 +564,20 @@ def parse_attendees(attendees_json: Optional[str], default_userid: Optional[str]
     return []
 
 
+def parse_name_list(names_json: Optional[str]) -> List[str]:
+    names = parse_json(names_json, [])
+    if not names:
+        return []
+    if not isinstance(names, list):
+        raise SystemExit("姓名列表必须是 JSON 数组，例如 [\"张三\", \"李四\"]。")
+    normalized: List[str] = []
+    for item in names:
+        value = str(item).strip()
+        if value:
+            normalized.append(value)
+    return normalized
+
+
 def parse_userids(userids_csv: Optional[str]) -> List[str]:
     if not userids_csv:
         return []
@@ -454,6 +614,8 @@ def apply_request_file(args: argparse.Namespace) -> argparse.Namespace:
         payload = json.loads(read_stdin_json_text())
     if payload is None:
         return args
+    if "attendee_names" in payload and "attendee_names_json" not in payload:
+        payload["attendee_names_json"] = payload["attendee_names"]
     for key, value in payload.items():
         if not hasattr(args, key):
             continue
@@ -480,6 +642,7 @@ def apply_text_file_inputs(args: argparse.Namespace) -> argparse.Namespace:
 
     json_file_map = {
         "attendees_file": "attendees_json",
+        "attendee_names_file": "attendee_names_json",
         "shares_file": "shares_json",
         "public_range_file": "public_range_json",
         "reminders_file": "reminders_json",
@@ -549,6 +712,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--user-id", help="企业微信 userid。")
     parser.add_argument("--mobile", help="用于解析 userid 的手机号。")
     parser.add_argument("--email", help="用于解析 userid 的邮箱地址。")
+    parser.add_argument("--name", help="用于精确解析 userid 的姓名。")
+    parser.add_argument(
+        "--name-department-id",
+        type=int,
+        help="按姓名解析时可选，用于缩小搜索范围的部门 ID。",
+    )
 
     parser.add_argument("--summary")
     parser.add_argument("--description")
@@ -567,9 +736,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--admins", help="日历管理员 userid，逗号分隔。")
     parser.add_argument("--shares-json", help='共享对象 JSON 列表，例如 [{"userid":"alice"}]。')
     parser.add_argument("--attendees-json", help='参会人 JSON 列表，例如 [{"userid":"alice"}]。')
+    parser.add_argument("--attendee-names-json", help='参会人姓名 JSON 列表，例如 ["张三","李四"]。')
     parser.add_argument("--public-range-json", help="public_range 对应的 JSON 对象。")
     parser.add_argument("--shares-file", help="共享对象对应的 UTF-8 JSON 文件。")
     parser.add_argument("--attendees-file", help="参会人对应的 UTF-8 JSON 文件。")
+    parser.add_argument("--attendee-names-file", help="参会人姓名对应的 UTF-8 JSON 文件。")
     parser.add_argument("--public-range-file", help="public_range 对应的 UTF-8 JSON 文件。")
     parser.add_argument("--color", default="#FF3030")
     parser.add_argument("--set-as-default", type=int, default=0)
@@ -611,10 +782,52 @@ def build_client(args: argparse.Namespace) -> WeComClient:
     return WeComClient(corp_id=corp_id, corp_secret=corp_secret, agent_id=agent_id, audit=audit)
 
 
+def resolve_name_department_id(args: argparse.Namespace) -> Optional[int]:
+    value = args.name_department_id
+    if value is not None:
+        return value
+    env_value = os.getenv("WECOM_NAME_DEPARTMENT_ID")
+    if not env_value:
+        return None
+    return int(env_value)
+
+
 def resolve_primary_user(client: WeComClient, args: argparse.Namespace) -> Optional[Dict[str, Any]]:
-    if args.user_id or args.mobile or args.email:
-        return client.resolve_user(user_id=args.user_id, mobile=args.mobile, email=args.email)
+    if args.user_id or args.mobile or args.email or args.name:
+        return client.resolve_user(
+            user_id=args.user_id,
+            mobile=args.mobile,
+            email=args.email,
+            name=args.name,
+            name_department_id=resolve_name_department_id(args),
+        )
     return None
+
+
+def resolve_attendees_from_names(
+    client: WeComClient,
+    attendee_names_json: Optional[str],
+    *,
+    name_department_id: Optional[int],
+) -> List[Dict[str, str]]:
+    names = parse_name_list(attendee_names_json)
+    if not names:
+        return []
+    resolved_attendees: List[Dict[str, str]] = []
+    seen_userids = set()
+    for name in names:
+        resolved = client.resolve_user(
+            user_id=None,
+            mobile=None,
+            email=None,
+            name=name,
+            name_department_id=name_department_id,
+        )
+        userid = resolved["userid"]
+        if userid not in seen_userids:
+            resolved_attendees.append({"userid": userid})
+            seen_userids.add(userid)
+    return resolved_attendees
 
 
 def maybe_auto_create_calendar(
@@ -628,7 +841,7 @@ def maybe_auto_create_calendar(
         return None
     user_id = (resolved_user or {}).get("userid")
     if not user_id:
-        raise SystemExit("--auto-create-calendar 需要先通过 --user-id、--mobile 或 --email 解析出有效用户。")
+        raise SystemExit("--auto-create-calendar 需要先通过 --user-id、--mobile、--email 或 --name 解析出有效用户。")
     admins = parse_userids(args.admins) or [user_id]
     shares = parse_json(args.shares_json, [{"userid": user_id}])
     summary = args.summary or f"{user_id} 自动创建日历"
@@ -650,10 +863,12 @@ def maybe_auto_create_calendar(
 def merged_update_schedule(
     current: Dict[str, Any],
     args: argparse.Namespace,
-    resolved_user: Optional[Dict[str, Any]],
+    resolved_attendees: Optional[List[Dict[str, str]]],
 ) -> Dict[str, Any]:
     if args.skip_attendees:
         attendees = normalize_attendees(current.get("attendees"))
+    elif resolved_attendees:
+        attendees = normalize_attendees(resolved_attendees)
     elif args.attendees_json:
         attendees = normalize_attendees(parse_attendees(args.attendees_json, None) or current.get("attendees"))
     else:
@@ -681,6 +896,12 @@ def merged_update_schedule(
 def run_action(args: argparse.Namespace) -> Dict[str, Any]:
     client = build_client(args)
     resolved_user = resolve_primary_user(client, args)
+    name_department_id = resolve_name_department_id(args)
+    resolved_attendees = resolve_attendees_from_names(
+        client,
+        args.attendee_names_json,
+        name_department_id=name_department_id,
+    )
     auto_calendar = maybe_auto_create_calendar(client, args, resolved_user)
     effective_cal_id = env_or_value(args.cal_id, "WECOM_CAL_ID", required=False) or (
         auto_calendar or {}
@@ -688,7 +909,7 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
 
     if args.action == "resolve-user":
         if not resolved_user:
-            raise SystemExit("resolve-user 需要提供 --user-id、--mobile 或 --email。")
+            raise SystemExit("resolve-user 需要提供 --user-id、--mobile、--email 或 --name。")
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
@@ -774,10 +995,11 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         user_id = (resolved_user or {}).get("userid")
         if not args.start or not args.end:
             raise SystemExit("create-schedule 需要提供 --start 和 --end。")
+        attendees = resolved_attendees or parse_attendees(args.attendees_json, user_id)
         schedule = {
             "start_time": parse_time(args.start),
             "end_time": parse_time(args.end),
-            "attendees": parse_attendees(args.attendees_json, user_id),
+            "attendees": attendees,
             "summary": args.summary,
             "description": args.description,
             "location": args.location,
@@ -790,6 +1012,7 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
             "request_id": client.audit.request_id,
             "channel": "wecom",
             "resolved_user": resolved_user,
+            "resolved_attendees": attendees,
             "created_schedule": payload,
             "effective_cal_id": schedule["cal_id"],
             "audit_log_path": str(client.audit.path),
@@ -802,12 +1025,13 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         schedule_list = current_payload.get("schedule_list") or []
         if not schedule_list:
             raise SystemExit(f"未找到日程：{args.schedule_id}")
-        body = merged_update_schedule(schedule_list[0], args, resolved_user)
+        body = merged_update_schedule(schedule_list[0], args, resolved_attendees)
         payload = client.update_schedule(body)
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
             "updated_schedule": payload,
+            "resolved_attendees": resolved_attendees,
             "audit_log_path": str(client.audit.path),
         }
 
@@ -832,15 +1056,16 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
     if args.action in {"add-attendees", "del-attendees"}:
         if not args.schedule_id:
             raise SystemExit(f"{args.action} 需要提供 --schedule-id。")
-        attendees = parse_attendees(args.attendees_json, (resolved_user or {}).get("userid"))
+        attendees = resolved_attendees or parse_attendees(args.attendees_json, (resolved_user or {}).get("userid"))
         if not attendees:
-            raise SystemExit(f"{args.action} 需要通过 --attendees-json 或用户解析结果提供参会人信息。")
+            raise SystemExit(f"{args.action} 需要通过 --attendees-json、--attendee-names-json 或用户解析结果提供参会人信息。")
         body = {"schedule_id": args.schedule_id, "attendees": attendees}
         payload = client.add_attendees(body) if args.action == "add-attendees" else client.del_attendees(body)
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
             "result": payload,
+            "resolved_attendees": attendees,
             "audit_log_path": str(client.audit.path),
         }
 

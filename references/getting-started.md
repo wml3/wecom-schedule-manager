@@ -123,13 +123,27 @@
 
 每次发起业务请求时，只需要输入当前任务相关的信息：
 
-1. 目标用户身份：`user_id`、`mobile` 或 `email`
+1. 目标用户身份：`user_id`、`mobile`、`email` 或 `name`
 2. 操作类型：查询、创建、更新、取消、提醒
 3. 时间范围（如果这个操作需要）
 4. 日程标题
 5. 日程描述
 6. 日程地点
-7. 如果是多人会议，还要提供参会人列表
+7. 如果是多人会议，还要提供参会人列表，可以直接给 `userid`，也可以给姓名列表
+
+## 按姓名解析的使用说明
+
+现在这个 skill 支持按姓名解析参会人，但有几个前提：
+
+1. 当前企业微信自建应用必须对目标成员具备通讯录可见范围
+2. 脚本会在当前应用可见范围内读取部门和成员，再按姓名做本地精确匹配
+3. 如果同名成员不止一个，脚本会直接报冲突，不会自动猜人
+4. 如果你已经知道 `userid`、手机号或邮箱，仍然优先推荐使用这些更稳定的标识
+
+如果你担心重名，可以补充：
+
+1. `--name-department-id`
+2. 或者直接改用 `userid`
 
 ## 中文输入的最佳实践
 
@@ -189,9 +203,9 @@
   "location": "请替换为会议地点",
   "start": "2026-01-01 09:00:00",
   "end": "2026-01-01 10:00:00",
-  "attendees_json": [
-    { "userid": "replace-with-attendee-1" },
-    { "userid": "replace-with-attendee-2" }
+  "attendee_names_json": [
+    "张三",
+    "李四"
   ]
 }
 ```
@@ -223,6 +237,12 @@ $env:WECOM_AUDIT_LOG_PATH="logs/wecom_audit.jsonl"
 py .\scripts\wecom_schedule_manager.py resolve-user --channel wecom --user-id your_userid --operator-id assistant
 ```
 
+按姓名解析用户：
+
+```powershell
+py .\scripts\wecom_schedule_manager.py resolve-user --channel wecom --name 张三 --operator-id assistant
+```
+
 通过 UTF-8 JSON 文件创建日程：
 
 ```powershell
@@ -245,6 +265,12 @@ export WECOM_AUDIT_LOG_PATH="logs/wecom_audit.jsonl"
 
 ```bash
 python3 ./scripts/wecom_schedule_manager.py resolve-user --channel wecom --user-id your_userid --operator-id assistant
+```
+
+按姓名解析用户：
+
+```bash
+python3 ./scripts/wecom_schedule_manager.py resolve-user --channel wecom --name 张三 --operator-id assistant
 ```
 
 通过 UTF-8 JSON 文件创建日程：

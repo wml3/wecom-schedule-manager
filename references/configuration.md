@@ -32,6 +32,20 @@
 | 已知 userid | `--user-id` | 最直接，也会被记录日志 |
 | 通过手机号解析 | `--mobile` | 会调用 `/user/getuserid`，随后调用 `/user/get` |
 | 通过邮箱解析 | `--email` | 会调用 `/user/get_userid_by_email`，随后调用 `/user/get` |
+| 通过姓名精确解析 | `--name` | 会先读取当前应用可见范围内的通讯录，再做本地精确匹配；重名时会报冲突，不会自动猜测 |
+
+按姓名解析时，还可以补充：
+
+| 参数 | CLI 参数 | 说明 |
+| --- | --- | --- |
+| 部门范围缩小 | `--name-department-id` | 可选。用于把姓名解析限制在某个部门范围内，减少重名冲突 |
+
+姓名解析的注意事项：
+
+1. 这不是企业微信提供的“按姓名直接换 userid”接口，而是脚本先读取当前应用可见范围内的通讯录，再在本地做精确匹配。
+2. 这要求当前自建应用具备通讯录可见范围，并且目标成员在该范围内。
+3. 当前只做精确匹配，不做模糊匹配。
+4. 如果出现重名，脚本会直接报冲突，要求改用 `userid`、手机号、邮箱，或通过 `--name-department-id` 缩小范围。
 
 ## 日程相关输入
 
@@ -43,6 +57,7 @@
 | 描述 | `--description` | 建议所有写操作都提供 | 普通文本 |
 | 地点 | `--location` | 创建或更新时可选 | 普通文本 |
 | 参会人 | `--attendees-json` | 创建/更新/增删参会人时 | JSON 列表，例如 `[{"userid":"alice"}]` |
+| 参会人姓名 | `--attendee-names-json` | 创建/更新/增删参会人时 | JSON 列表，例如 `["张三","李四"]`，脚本会按姓名精确解析出 userid |
 | 日程 ID | `--schedule-id` | 获取/更新/取消/增删参会人时 | 企业微信返回的字符串 |
 | 多个日程 ID | `--schedule-ids` | 批量获取时 | 逗号分隔 |
 | 提醒配置 | `--reminders-json` | 高级创建/更新场景 | 直接传给企业微信的 JSON 对象 |
@@ -56,6 +71,7 @@
 | 地点 | `--location-file` | UTF-8 文本文件 |
 | 提醒内容 | `--content-file` | UTF-8 文本文件 |
 | 参会人 | `--attendees-file` | UTF-8 JSON 文件 |
+| 参会人姓名 | `--attendee-names-file` | UTF-8 JSON 文件 |
 | 共享对象 | `--shares-file` | UTF-8 JSON 文件 |
 | 可见范围 | `--public-range-file` | UTF-8 JSON 文件 |
 | 提醒配置 | `--reminders-file` | UTF-8 JSON 文件 |
@@ -104,11 +120,11 @@
 
 针对每一次请求，只收集任务相关参数：
 
-1. 用户身份：`user_id`、`mobile` 或 `email`
+1. 用户身份：`user_id`、`mobile`、`email` 或 `name`
 2. 操作类型：查询、创建、更新、取消、提醒、参会人维护
 3. 时间范围：`start`、`end`
 4. 日程信息：`summary`、`description`、`location`
-5. 可选：参会人列表或 `schedule_id`
+5. 可选：参会人 `userid` 列表、参会人姓名列表或 `schedule_id`
 
 ## 安全说明
 

@@ -5,8 +5,8 @@
   "location": "请替换为会议地点",
   "start": "2026-01-01 09:00:00",
   "end": "2026-01-01 10:00:00",
-  "attendees_json": [
-    { "userid": "replace-with-attendee-1" },
-    { "userid": "replace-with-attendee-2" }
+  "attendee_names_json": [
+    "张三",
+    "李四"
   ]
 }
