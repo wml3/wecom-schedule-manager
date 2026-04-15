@@ -1,0 +1,7 @@
+{
+  "user_id": "replace-with-operator-userid",
+  "schedule_id": "replace-with-existing-schedule-id",
+  "summary": "请替换为新的会议标题",
+  "description": "请替换为新的备注内容",
+  "location": "请替换为新的会议地点"
+}

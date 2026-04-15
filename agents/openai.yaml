@@ -1,0 +1,4 @@
+interface:
+  display_name: "企业微信日程助手"
+  short_description: "通过企业微信管理日程并记录审计日志。"
+  default_prompt: "使用这个 skill 通过企业微信 API 管理企业日程，要求先解析用户身份，再执行创建、查询、更新、取消和提醒等操作，并保留审计日志。"
