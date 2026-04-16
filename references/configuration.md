@@ -20,6 +20,7 @@
 | 应用 Secret | `--corp-secret` | `WECOM_CORP_SECRET` | 是 | 调用企业微信 API 的应用密钥 |
 | 应用 AgentID | `--agent-id` | `WECOM_AGENT_ID` | 是 | 用于创建日历和发送应用消息提醒的应用标识 |
 | 日历 ID | `--cal-id` | `WECOM_CAL_ID` | 视情况而定 | 日程操作使用的日历容器。查询/创建/更新/取消通常都需要；第一次接入时可以先留空，配合 `--auto-create-calendar` 或先执行 `create-calendar` 自动创建，再把返回的 `cal_id` 回填 |
+| 日历绑定文件 | `--calendar-bindings-path` | `WECOM_CALENDAR_BINDINGS_PATH` | 否 | 脚本维护的 `userid -> cal_id` 本地绑定表。首次创建日程时如果没有显式 `cal_id`，会优先查这里，没有则自动创建并写回 |
 | 操作者标识 | `--operator-id` | 无 | 强烈建议 | 写入审计日志的人或自动化服务标识 |
 | 审计日志路径 | `--audit-log-path` | `WECOM_AUDIT_LOG_PATH` | 强烈建议 | 保存可审计事件的 JSONL 文件路径 |
 
@@ -58,6 +59,14 @@
 | 地点 | `--location` | 创建或更新时可选 | 普通文本 |
 | 参会人 | `--attendees-json` | 创建/更新/增删参会人时 | JSON 列表，例如 `[{"userid":"alice"}]` |
 | 参会人姓名 | `--attendee-names-json` | 创建/更新/增删参会人时 | JSON 列表，例如 `["张三","李四"]`，脚本会按姓名精确解析出 userid |
+| 参会部门 ID | `--attendee-department-id` | 创建/更新/增删参会人时 | 企业微信部门 ID，脚本会批量展开部门成员 |
+| 参会部门名称 | `--attendee-department-name` | 创建/更新/增删参会人时 | 部门名称精确匹配，适合直接按团队名拉人 |
+| 参会部门路径 | `--attendee-department-path` | 创建/更新/增删参会人时 | 组织路径，例如 `一级组织/二级团队`，脚本会从上到下逐层解析 |
+| 参会部门短语 | `--attendee-department-query` | 创建/更新/增删参会人时 | 组织自然语言短语，例如 `一级组织二级团队`，脚本会自动在组织树里搜索最可能路径 |
+| 部门父级范围 | `--attendee-department-parent-id` | 按部门名称解析时可选 | 用于缩小同名部门的匹配范围 |
+| 路径根部门 | `--attendee-department-root-id` | 按部门路径解析时可选 | 默认读取 `WECOM_DEPARTMENT_ROOT_ID`，未配置时使用根部门 `1` |
+| 仅直属成员 | `--attendee-direct-only` | 按部门批量加人时可选 | 仅添加目标部门直属成员，不展开子部门 |
+| 预览样本人数 | `--preview-limit` | `preview-department-attendees` 时可选 | 返回前几个样本成员供确认 |
 | 日程 ID | `--schedule-id` | 获取/更新/取消/增删参会人时 | 企业微信返回的字符串 |
 | 多个日程 ID | `--schedule-ids` | 批量获取时 | 逗号分隔 |
 | 提醒配置 | `--reminders-json` | 高级创建/更新场景 | 直接传给企业微信的 JSON 对象 |
@@ -77,6 +86,31 @@
 | 提醒配置 | `--reminders-file` | UTF-8 JSON 文件 |
 | 整体请求 | `--request-file` | 包含多个字段的 UTF-8 JSON 文件 |
 | 标准输入请求 | `--request-stdin` | 从标准输入读取 UTF-8 JSON 对象 |
+
+团队/部门批量加人的建议：
+
+1. 能拿到稳定的部门 ID 时，优先使用 `--attendee-department-id`
+2. 只有团队名称时，使用 `--attendee-department-name`，并确保名称在当前可见范围内唯一
+3. 上下级组织都清楚时，优先使用 `--attendee-department-path`，例如 `一级组织/二级团队`
+4. 用户只给了自然语言组织短语时，优先使用 `--attendee-department-query`，例如 `一级组织二级团队`
+5. 默认会展开子部门；只需要直属成员时再加 `--attendee-direct-only`
+6. 不确定组织是否匹配正确时，先执行 `preview-department-attendees` 返回样本成员再确认创建
+
+`cal_id` 自动绑定建议：
+
+1. 不要再把 `WECOM_CAL_ID` 当成所有人的全局固定值
+2. 对于“用户 A 来对话”这类场景，先通过 `userid/手机号/邮箱/姓名` 解析出稳定 `userid`
+3. 脚本会先查本地绑定文件里的 `userid -> cal_id`
+4. 如果该用户还没有绑定，首次 `create-schedule` 会自动创建一个日历并把新 `cal_id` 写入绑定文件
+5. 之后这个用户再次创建或查询自己的日程时，就不需要再手工传 `--cal-id`
+
+推荐的创建策略：
+
+1. 对话层优先调用 `prepare-schedule-create`
+2. 返回 `ready` 时，再调用 `create-schedule`
+3. 返回 `needs_confirmation` 时，先让用户确认组织或成员
+4. 日程创建成功后，默认单独追问是否要创建会议
+5. 用户确认后，再调用 `create-meeting`
 
 ## 日历相关输入
 

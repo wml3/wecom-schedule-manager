@@ -1,0 +1,9 @@
+{
+  "user_id": "replace-with-organizer-userid",
+  "summary": "团队沟通日程",
+  "description": "先做组织识别与参会人确认，再决定是否正式创建日程。",
+  "location": "线上会议",
+  "start": "2026-04-16 15:00:00",
+  "end": "2026-04-16 15:30:00",
+  "attendee_department_query": "一级组织二级团队"
+}

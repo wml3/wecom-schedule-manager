@@ -1,0 +1,9 @@
+{
+  "user_id": "replace-with-organizer-userid",
+  "summary": "团队沟通日程",
+  "description": "用于按组织路径创建完整日程的通用模板。",
+  "location": "线上会议",
+  "start": "2026-04-16 15:00:00",
+  "end": "2026-04-16 15:30:00",
+  "attendee_department_path": "一级组织/二级团队"
+}

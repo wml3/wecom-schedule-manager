@@ -129,6 +129,19 @@ Windows：
 py -m pip install requests
 ```
 
+## 用户级 CAL_ID 自动绑定
+
+现在不一定需要手工维护全局 `WECOM_CAL_ID`。
+
+推荐流程：
+
+- 用户先通过 `userid`、手机号、邮箱或姓名解析出稳定身份
+- 脚本优先读取本地绑定文件 `logs/wecom_calendar_bindings.json`
+- 如果这个用户已经绑定过 `cal_id`，后续直接复用
+- 如果是首次使用且当前在创建日程，脚本会自动创建一个新日历，并把 `userid -> cal_id` 写回绑定文件
+
+这更适合真实业务场景里的“用户 A 来对话，就自动用 A 自己的日历容器”。
+
 ## 中文输入建议
 
 为了避免终端乱码，建议优先使用：
@@ -139,6 +152,135 @@ py -m pip install requests
 - `--description-file`
 - `--location-file`
 - `--attendees-file`
+
+## 团队/部门批量加人
+
+如果你的目标是“创建一个团队沟通日程，并把某个组织下的所有成员都加进去”，优先把这个团队作为企业微信部门处理，然后直接用部门参数批量展开成员：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通日程" \
+  --attendee-department-name "示例团队"
+```
+
+补充说明：
+
+- 默认会展开子部门成员
+- 如果只需要直属成员，追加 `--attendee-direct-only`
+- 如果部门名称可能重名，改用 `--attendee-department-id`
+- 这组参数同样适用于 `update-schedule`、`add-attendees`、`del-attendees`
+- 可直接参考模板：`assets/request-templates/create-schedule-request-department.json`
+
+如果组织是分层的，比如“一级组织”是上层，“二级团队”是下层，建议改用路径解析并先做预览确认：
+
+```bash
+python scripts/wecom_schedule_manager.py preview-department-attendees \
+  --channel wecom \
+  --attendee-department-path "一级组织/二级团队" \
+  --preview-limit 5
+```
+
+这个命令会返回：
+
+- 最终命中的部门
+- 部门总成员数
+- 前几个样本成员，便于创建者确认是否拉对组织
+
+确认无误后，再用同一条路径创建日程：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通日程" \
+  --attendee-department-path "一级组织/二级团队"
+```
+
+如果用户给的是更自然的表述，例如“添加某个组织下的所有成员”，现在也可以直接让脚本自行遍历：
+
+```bash
+python scripts/wecom_schedule_manager.py preview-department-attendees \
+  --channel wecom \
+  --attendee-department-query "一级组织二级团队" \
+  --preview-limit 5
+```
+
+这条能力的默认行为是：
+
+- 先在当前可见组织树中搜索最可能的完整路径
+- 如果命中结果足够明确，直接返回对应组织和样本成员
+- 只有当候选组织分数接近、存在歧义时，才建议用户确认
+
+正式创建时也可以直接复用同一个短语：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通日程" \
+  --attendee-department-query "一级组织二级团队"
+```
+
+可直接参考模板：`assets/request-templates/prepare-schedule-create-request.json`
+
+## 一次性创建策略
+
+现在更推荐的对话/编排流程不是“先创建日程，再补加参会人”，而是：
+
+1. 先执行 `prepare-schedule-create`
+2. 如果组织识别清晰，就直接返回 `ready`
+3. 如果组织识别存在歧义，就返回候选组织和样本成员，先向用户确认
+4. 确认后再执行 `create-schedule`，一次性把完整参会人写进去
+
+示例：
+
+```bash
+python scripts/wecom_schedule_manager.py prepare-schedule-create \
+  --channel wecom \
+  --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通日程" \
+  --attendee-department-query "一级组织二级团队"
+```
+
+## 会议追加创建
+
+创建日程后，脚本默认不会自动创建会议，而是建议继续追问一次“是否需要创建会议？”。
+
+如果用户确认需要会议，再单独执行：
+
+```bash
+python scripts/wecom_schedule_manager.py create-meeting \
+  --channel wecom \
+  --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通会议" \
+  --attendee-department-query "一级组织二级团队"
+```
+
+## Skill 编排建议
+
+如果这一层是对话式 skill，而不是底层脚本，推荐默认按下面规则执行：
+
+1. 用户没明确给主题时，先基于组织名、场景词、测试/正式语境自动拟一个主题
+2. 用户没明确给内容时，先自动拟一个简短内容
+3. 返回拟定结果时，顺带追问一句：
+   `是否需要我进一步拟定更准确的会议主题和会议内容？`
+4. 优先在组织识别成功后一次性创建完整日程，不要默认“先创建日程、再补加参会人”
+5. 只有在组织识别、人员范围或主题内容不够确定时，才先向用户确认
+6. 日程创建成功后，再问一次：
+   `是否需要基于这个日程继续创建会议？`
+7. 用户没有明确表达需要会议时，不要创建会议
 
 ## 文档入口
 

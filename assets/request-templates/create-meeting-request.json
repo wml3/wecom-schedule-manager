@@ -1,0 +1,9 @@
+{
+  "user_id": "replace-with-organizer-userid",
+  "summary": "团队沟通会议",
+  "description": "在日程创建完成并确认需要会议后，用于补充创建会议。",
+  "location": "线上会议",
+  "start": "2026-04-16 15:00:00",
+  "end": "2026-04-16 15:30:00",
+  "attendee_department_query": "一级组织二级团队"
+}

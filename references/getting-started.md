@@ -168,7 +168,7 @@
 4. 用一个已知员工测试 `resolve-user`
 5. 如果还没有日历，先运行 `create-calendar`
 6. 把返回的 `cal_id` 回填到 `WECOM_CAL_ID` 或 Skill 长期配置
-7. 试创建一条小范围测试日程
+7. 先创建一条小范围验证日程
 8. 打开企业微信确认日程显示正常
 
 ## 安装 Python 和 requests

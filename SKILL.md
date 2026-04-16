@@ -60,6 +60,100 @@ python scripts/wecom_schedule_manager.py create-schedule \
   --audit-log-path "<audit_log_path>"
 ```
 
+如果要把整个团队或部门批量加入参会人，可以直接在创建、更新、增删参会人时使用下面任一组参数：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --cal-id "$WECOM_CAL_ID" \
+  --user-id "<organizer_userid>" \
+  --start "<YYYY-MM-DD HH:MM:SS>" \
+  --end "<YYYY-MM-DD HH:MM:SS>" \
+  --summary "<summary>" \
+  --attendee-department-name "示例团队"
+```
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --cal-id "$WECOM_CAL_ID" \
+  --user-id "<organizer_userid>" \
+  --start "<YYYY-MM-DD HH:MM:SS>" \
+  --end "<YYYY-MM-DD HH:MM:SS>" \
+  --summary "<summary>" \
+  --attendee-department-id "<department_id>" \
+  --attendee-direct-only
+```
+
+说明：
+
+- `--attendee-department-name` 按部门名称精确匹配；如果重名，改用 `--attendee-department-id`
+- 默认会展开子部门成员；如果只要直属成员，追加 `--attendee-direct-only`
+- 可以和 `--attendees-json`、`--attendee-names-json` 同时使用，脚本会自动去重合并
+- 如果当前请求没有显式 `cal_id`，优先根据当前已解析用户去本地绑定表里读取；创建日程时如果还是没有，就自动创建并绑定一个新的 `cal_id`
+
+如果部门本身是分层组织，例如“一级组织 / 二级团队”，优先使用路径方式做逐层解析：
+
+```bash
+python scripts/wecom_schedule_manager.py preview-department-attendees \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --attendee-department-path "一级组织/二级团队" \
+  --preview-limit 5
+```
+
+确认样本成员无误后，再正式创建：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --cal-id "$WECOM_CAL_ID" \
+  --user-id "<organizer_userid>" \
+  --start "<YYYY-MM-DD HH:MM:SS>" \
+  --end "<YYYY-MM-DD HH:MM:SS>" \
+  --summary "<summary>" \
+  --attendee-department-path "一级组织/二级团队"
+```
+
+如果用户给的是更自然的组织短语，例如“创建一个团队沟通日程，添加某个组织下的所有成员”，不要先要求部门 ID。优先让脚本自己遍历组织树：
+
+```bash
+python scripts/wecom_schedule_manager.py preview-department-attendees \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --attendee-department-query "一级组织二级团队" \
+  --preview-limit 5
+```
+
+如果返回结果只有一个高置信度组织，就继续直接创建：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --corp-id "$WECOM_CORP_ID" \
+  --corp-secret "$WECOM_CORP_SECRET" \
+  --agent-id "$WECOM_AGENT_ID" \
+  --cal-id "$WECOM_CAL_ID" \
+  --user-id "<organizer_userid>" \
+  --start "<YYYY-MM-DD HH:MM:SS>" \
+  --end "<YYYY-MM-DD HH:MM:SS>" \
+  --summary "<summary>" \
+  --attendee-department-query "一级组织二级团队"
+```
+
 ```bash
 python scripts/wecom_schedule_manager.py send-reminder \
   --channel wecom \
@@ -71,6 +165,14 @@ python scripts/wecom_schedule_manager.py send-reminder \
   --operator-id "<operator_id>" \
   --audit-log-path "<audit_log_path>"
 ```
+
+对于对话式编排，推荐采用下面这条顺序：
+
+1. 先执行 `prepare-schedule-create`
+2. 如果返回 `status=ready`，再执行 `create-schedule`
+3. 如果返回 `status=needs_confirmation`，先把候选组织和样本成员给用户确认
+4. 日程创建成功后，默认再追问一次“是否需要创建会议？”
+5. 只有用户确认后，才执行 `create-meeting`
 
 ## 决策点
 
@@ -126,3 +228,43 @@ python scripts/wecom_schedule_manager.py send-reminder \
 - 结果中包含 `audit_log_path`。
 - 失败时直接返回企业微信的 `errcode` 和 `errmsg`。
 - 有值时返回已解析的 `userid`、`schedule_id` 和 `cal_id`。
+## Skill Layer Strategy
+
+Use these rules in the skill/orchestration layer even when the script stays generic:
+
+1. If the user did not explicitly provide a title, draft one from the known context first.
+2. If the user did not explicitly provide meeting content/description, draft a short usable description first.
+3. When returning the drafted title/description, also ask once: "是否需要我进一步拟定更准确的会议主题和会议内容？"
+4. Prefer creating the full schedule in one shot after attendee/org resolution succeeds. Do not default to "create first, then add attendees".
+5. If org recognition, attendee scope, or title/content is clearly ambiguous, ask for confirmation before creation.
+6. Treat schedule and meeting as one-to-one at the conversation level, but schedule is mandatory and meeting is optional.
+7. After the schedule is created, ask once: "是否需要基于这个日程继续创建会议？"
+8. Only create a meeting when the user explicitly confirms they want one. Otherwise do not create a meeting.
+
+### Drafting Rule
+
+When no explicit title is given, prefer a title using:
+
+1. business object or intent from the user utterance
+2. team/department name if available
+3. test/official context if present
+
+Examples:
+
+1. `团队沟通日程`
+2. `一级组织二级团队沟通日程`
+
+When no explicit description is given, draft a short description containing:
+
+1. target team or attendee scope
+2. time or scene if known
+3. whether it is a test/verification schedule if applicable
+
+### Meeting Rule
+
+The default conversation sequence should be:
+
+1. prepare schedule
+2. create schedule
+3. ask whether a meeting should be created
+4. create meeting only after an explicit yes
