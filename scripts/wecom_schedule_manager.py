@@ -187,6 +187,80 @@ class CalendarBindingStore:
         return record
 
 
+class ScheduleMeetingLinkStore:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._data: Optional[Dict[str, Any]] = None
+
+    def _load(self) -> Dict[str, Any]:
+        if self._data is not None:
+            return self._data
+        if self.path.exists():
+            self._data = json.loads(self.path.read_text(encoding="utf-8-sig"))
+        else:
+            self._data = {"version": 1, "schedule_contexts": {}}
+        self._data.setdefault("version", 1)
+        self._data.setdefault("schedule_contexts", {})
+        return self._data
+
+    def _save(self) -> None:
+        data = self._load()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _context_key(corp_id: str, agent_id: str, schedule_id: str) -> str:
+        return f"{corp_id}:{agent_id}:{schedule_id}"
+
+    def get(self, *, corp_id: str, agent_id: str, schedule_id: str) -> Optional[Dict[str, Any]]:
+        contexts = self._load()["schedule_contexts"]
+        return contexts.get(self._context_key(corp_id, agent_id, schedule_id))
+
+    def set_schedule_context(
+        self,
+        *,
+        corp_id: str,
+        agent_id: str,
+        schedule_id: str,
+        context: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        key = self._context_key(corp_id, agent_id, schedule_id)
+        existing = self._load()["schedule_contexts"].get(key) or {}
+        record = {
+            **existing,
+            **context,
+            "corp_id": corp_id,
+            "agent_id": agent_id,
+            "schedule_id": schedule_id,
+            "updated_at": iso_now(),
+        }
+        record.setdefault("created_at", record["updated_at"])
+        self._load()["schedule_contexts"][key] = record
+        self._save()
+        return record
+
+    def bind_meeting(
+        self,
+        *,
+        corp_id: str,
+        agent_id: str,
+        schedule_id: str,
+        meeting_link: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        key = self._context_key(corp_id, agent_id, schedule_id)
+        existing = self._load()["schedule_contexts"].get(key) or {
+            "corp_id": corp_id,
+            "agent_id": agent_id,
+            "schedule_id": schedule_id,
+            "created_at": iso_now(),
+        }
+        existing["meeting_link"] = meeting_link
+        existing["updated_at"] = iso_now()
+        self._load()["schedule_contexts"][key] = existing
+        self._save()
+        return existing
+
+
 class WeComError(RuntimeError):
     def __init__(self, message: str, response: Optional[Dict[str, Any]] = None) -> None:
         super().__init__(message)
@@ -1056,6 +1130,43 @@ def merge_attendees(
     return []
 
 
+def find_first_value(payload: Any, candidate_keys: Iterable[str]) -> Optional[Any]:
+    key_set = set(candidate_keys)
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            if key in key_set and value not in (None, "", [], {}):
+                return value
+            nested = find_first_value(value, candidate_keys)
+            if nested not in (None, "", [], {}):
+                return nested
+    elif isinstance(payload, list):
+        for item in payload:
+            nested = find_first_value(item, candidate_keys)
+            if nested not in (None, "", [], {}):
+                return nested
+    return None
+
+
+def extract_schedule_id(payload: Dict[str, Any]) -> Optional[str]:
+    value = find_first_value(payload, ("schedule_id",))
+    return str(value) if value not in (None, "") else None
+
+
+def extract_meeting_id(payload: Dict[str, Any]) -> Optional[str]:
+    value = find_first_value(payload, ("meetingid", "meeting_id"))
+    return str(value) if value not in (None, "") else None
+
+
+def extract_meeting_url(payload: Dict[str, Any]) -> Optional[str]:
+    value = find_first_value(payload, ("join_url", "meeting_url", "url"))
+    return str(value) if value not in (None, "") else None
+
+
+def extract_meeting_code(payload: Dict[str, Any]) -> Optional[str]:
+    value = find_first_value(payload, ("meeting_code", "meetingid", "meeting_id"))
+    return str(value) if value not in (None, "") else None
+
+
 def normalize_reminders(reminders: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     source = reminders or {}
     if not source:
@@ -1241,6 +1352,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="用户与 cal_id 的本地绑定文件，首次自动建日历后会写入这里。",
     )
     parser.add_argument("--operator-id", help="写入审计日志的操作者标识。")
+    parser.add_argument(
+        "--schedule-meeting-links-path",
+        default=os.getenv("WECOM_SCHEDULE_MEETING_LINKS_PATH", "logs/wecom_schedule_meeting_links.json"),
+        help="日程与会议关联记录的本地文件，用于追踪 schedule_id -> meeting_id 上下文。",
+    )
     parser.add_argument("--audit-log-path", default=os.getenv("WECOM_AUDIT_LOG_PATH", "logs/wecom_audit.jsonl"))
     parser.add_argument("--request-id", default=None)
     parser.add_argument(
@@ -1350,6 +1466,10 @@ def build_client(args: argparse.Namespace) -> WeComClient:
 
 def build_calendar_binding_store(args: argparse.Namespace) -> CalendarBindingStore:
     return CalendarBindingStore(Path(args.calendar_bindings_path))
+
+
+def build_schedule_meeting_link_store(args: argparse.Namespace) -> ScheduleMeetingLinkStore:
+    return ScheduleMeetingLinkStore(Path(args.schedule_meeting_links_path))
 
 
 def resolve_name_department_id(args: argparse.Namespace) -> Optional[int]:
@@ -1557,6 +1677,116 @@ def resolve_effective_calendar(
     }
 
 
+def build_schedule_context(
+    *,
+    schedule_id: str,
+    cal_id: Optional[str],
+    organizer_user_id: Optional[str],
+    summary: Optional[str],
+    description: Optional[str],
+    location: Optional[str],
+    start_time: Optional[int],
+    end_time: Optional[int],
+    attendees: Optional[List[Dict[str, Any]]],
+) -> Dict[str, Any]:
+    return compact_payload(
+        {
+            "schedule_id": schedule_id,
+            "cal_id": cal_id,
+            "organizer_user_id": organizer_user_id,
+            "summary": summary,
+            "description": description,
+            "location": location,
+            "start_time": start_time,
+            "end_time": end_time,
+            "attendees": normalize_attendees(attendees),
+        }
+    )
+
+
+def persist_schedule_context(
+    client: WeComClient,
+    store: ScheduleMeetingLinkStore,
+    *,
+    schedule_context: Dict[str, Any],
+    source: str,
+) -> Dict[str, Any]:
+    record = store.set_schedule_context(
+        corp_id=client.corp_id,
+        agent_id=str(client.agent_id),
+        schedule_id=schedule_context["schedule_id"],
+        context={**schedule_context, "source": source},
+    )
+    client.audit.append(
+        "schedule.meeting_context.write",
+        {
+            "schedule_id": schedule_context["schedule_id"],
+            "source": source,
+            "links_path": str(store.path),
+            "meeting_linked": bool(record.get("meeting_link")),
+        },
+    )
+    return record
+
+
+def fetch_schedule_context_from_remote(
+    client: WeComClient,
+    *,
+    schedule_id: str,
+    organizer_user_id: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    payload = client.get_schedule([schedule_id])
+    schedule_list = payload.get("schedule_list") or []
+    if not schedule_list:
+        return None
+    current = schedule_list[0]
+    return build_schedule_context(
+        schedule_id=current.get("schedule_id") or schedule_id,
+        cal_id=current.get("cal_id"),
+        organizer_user_id=organizer_user_id,
+        summary=current.get("summary"),
+        description=current.get("description"),
+        location=current.get("location"),
+        start_time=current.get("start_time"),
+        end_time=current.get("end_time"),
+        attendees=current.get("attendees"),
+    )
+
+
+def resolve_schedule_context_for_meeting(
+    client: WeComClient,
+    args: argparse.Namespace,
+    store: ScheduleMeetingLinkStore,
+    resolved_user: Optional[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    if not args.schedule_id:
+        return None
+    schedule_context = store.get(
+        corp_id=client.corp_id,
+        agent_id=str(client.agent_id),
+        schedule_id=args.schedule_id,
+    )
+    client.audit.append(
+        "schedule.meeting_context.lookup",
+        {
+            "schedule_id": args.schedule_id,
+            "links_path": str(store.path),
+            "context_found": bool(schedule_context),
+        },
+    )
+    if schedule_context:
+        return schedule_context
+
+    fetched_context = fetch_schedule_context_from_remote(
+        client,
+        schedule_id=args.schedule_id,
+        organizer_user_id=(resolved_user or {}).get("userid"),
+    )
+    if not fetched_context:
+        return None
+    return persist_schedule_context(client, store, schedule_context=fetched_context, source="remote_lookup")
+
+
 def merged_update_schedule(
     current: Dict[str, Any],
     args: argparse.Namespace,
@@ -1731,6 +1961,7 @@ def prepare_schedule_create(
 def run_action(args: argparse.Namespace) -> Dict[str, Any]:
     client = build_client(args)
     binding_store = build_calendar_binding_store(args)
+    schedule_meeting_store = build_schedule_meeting_link_store(args)
     resolved_user = resolve_primary_user(client, args)
     name_department_id = resolve_name_department_id(args)
     resolved_name_attendees = resolve_attendees_from_names(
@@ -1904,6 +2135,25 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         }
         body = {"schedule": compact_payload(schedule)}
         payload = client.create_schedule(body)
+        created_schedule_id = extract_schedule_id(payload)
+        schedule_context_record = None
+        if created_schedule_id:
+            schedule_context_record = persist_schedule_context(
+                client,
+                schedule_meeting_store,
+                schedule_context=build_schedule_context(
+                    schedule_id=created_schedule_id,
+                    cal_id=schedule["cal_id"],
+                    organizer_user_id=user_id,
+                    summary=schedule.get("summary"),
+                    description=schedule.get("description"),
+                    location=schedule.get("location"),
+                    start_time=schedule.get("start_time"),
+                    end_time=schedule.get("end_time"),
+                    attendees=attendees,
+                ),
+                source="create_schedule",
+            )
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
@@ -1914,6 +2164,8 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
                 "department": resolved_department_result,
             },
             "created_schedule": payload,
+            "schedule_id": created_schedule_id,
+            "schedule_context": schedule_context_record,
             "effective_cal_id": schedule["cal_id"],
             "calendar_binding": calendar_context["binding_record"],
             "calendar_resolution": {
@@ -1923,12 +2175,15 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
             "meeting_follow_up": {
                 "default_create_meeting": False,
                 "supported": True,
+                "schedule_id": created_schedule_id,
+                "links_path": str(schedule_meeting_store.path),
+                "next_prompt": "日程已创建，是否需要基于这条日程继续创建会议？",
                 "next_prompt": "日程已创建，是否需要继续创建会议？",
             },
             "audit_log_path": str(client.audit.path),
         }
 
-    if args.action == "create-meeting":
+    if False and args.action == "create-meeting":
         user_id = (resolved_user or {}).get("userid")
         if not user_id:
             raise SystemExit("create-meeting 需要先解析出会议管理员用户。")
@@ -1959,6 +2214,104 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
             "resolved_attendees": attendees,
             "meeting_request": body,
             "meeting_result": payload,
+            "audit_log_path": str(client.audit.path),
+        }
+
+    if args.action == "create-meeting":
+        schedule_context = resolve_schedule_context_for_meeting(client, args, schedule_meeting_store, resolved_user)
+        existing_meeting_link = (schedule_context or {}).get("meeting_link")
+        if existing_meeting_link:
+            return {
+                "request_id": client.audit.request_id,
+                "channel": "wecom",
+                "status": "already_linked",
+                "schedule_id": (schedule_context or {}).get("schedule_id"),
+                "schedule_context": schedule_context,
+                "meeting_link": existing_meeting_link,
+                "next_prompt": "该日程已经关联过会议，如需重新创建，请先确认是否要替换已有会议。",
+                "audit_log_path": str(client.audit.path),
+            }
+        user_id = (resolved_user or {}).get("userid") or (schedule_context or {}).get("organizer_user_id")
+        if not user_id:
+            raise SystemExit("create-meeting 需要先解析出会议管理员用户，或提供可复用的 schedule_id 上下文。")
+        start_ts = parse_time(args.start) if args.start else (schedule_context or {}).get("start_time")
+        end_ts = parse_time(args.end) if args.end else (schedule_context or {}).get("end_time")
+        if not start_ts or not end_ts:
+            raise SystemExit("create-meeting 需要提供 --schedule-id 对应的日程上下文，或显式提供 --start 和 --end。")
+        attendees = merge_attendees(explicit_attendees, (schedule_context or {}).get("attendees"), default_userid=user_id)
+        duration_minutes = max(1, int((end_ts - start_ts) / 60))
+        meeting_title = args.summary if args.summary is not None else (schedule_context or {}).get("summary") or "企业微信会议"
+        meeting_description = args.description if args.description is not None else (schedule_context or {}).get("description")
+        meeting_location = args.location if args.location is not None else (schedule_context or {}).get("location")
+        body = compact_payload(
+            {
+                "admin_userid": user_id,
+                "title": meeting_title,
+                "meeting_start": start_ts,
+                "meeting_duration": duration_minutes,
+                "description": meeting_description,
+                "location": meeting_location,
+                "agentid": client.agent_id,
+                "attendees": {"userid": [item["userid"] for item in attendees]},
+                "settings": parse_json(args.meeting_settings_json, None),
+            }
+        )
+        payload = client.create_meeting(body)
+        linked_schedule_context = schedule_context
+        if args.schedule_id and not linked_schedule_context:
+            linked_schedule_context = persist_schedule_context(
+                client,
+                schedule_meeting_store,
+                schedule_context=build_schedule_context(
+                    schedule_id=args.schedule_id,
+                    cal_id=effective_cal_id,
+                    organizer_user_id=user_id,
+                    summary=meeting_title,
+                    description=meeting_description,
+                    location=meeting_location,
+                    start_time=start_ts,
+                    end_time=end_ts,
+                    attendees=attendees,
+                ),
+                source="create_meeting_fallback",
+            )
+        meeting_link = compact_payload(
+            {
+                "schedule_id": (linked_schedule_context or {}).get("schedule_id"),
+                "meeting_id": extract_meeting_id(payload),
+                "meeting_code": extract_meeting_code(payload),
+                "meeting_url": extract_meeting_url(payload),
+                "linked_at": iso_now(),
+                "source": "create_meeting",
+            }
+        )
+        if (linked_schedule_context or {}).get("schedule_id"):
+            linked_schedule_context = schedule_meeting_store.bind_meeting(
+                corp_id=client.corp_id,
+                agent_id=str(client.agent_id),
+                schedule_id=linked_schedule_context["schedule_id"],
+                meeting_link=meeting_link,
+            )
+            client.audit.append(
+                "schedule.meeting_link.write",
+                {
+                    "schedule_id": linked_schedule_context["schedule_id"],
+                    "meeting_id": meeting_link.get("meeting_id"),
+                    "meeting_url": meeting_link.get("meeting_url"),
+                    "links_path": str(schedule_meeting_store.path),
+                },
+            )
+        return {
+            "request_id": client.audit.request_id,
+            "channel": "wecom",
+            "status": "created",
+            "schedule_id": (linked_schedule_context or {}).get("schedule_id"),
+            "schedule_context": linked_schedule_context,
+            "resolved_user": resolved_user,
+            "resolved_attendees": attendees,
+            "meeting_request": body,
+            "meeting_result": payload,
+            "meeting_link": meeting_link,
             "audit_log_path": str(client.audit.path),
         }
 

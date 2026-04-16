@@ -21,6 +21,7 @@
 | 应用 AgentID | `--agent-id` | `WECOM_AGENT_ID` | 是 | 用于创建日历和发送应用消息提醒的应用标识 |
 | 日历 ID | `--cal-id` | `WECOM_CAL_ID` | 视情况而定 | 日程操作使用的日历容器。查询/创建/更新/取消通常都需要；第一次接入时可以先留空，配合 `--auto-create-calendar` 或先执行 `create-calendar` 自动创建，再把返回的 `cal_id` 回填 |
 | 日历绑定文件 | `--calendar-bindings-path` | `WECOM_CALENDAR_BINDINGS_PATH` | 否 | 脚本维护的 `userid -> cal_id` 本地绑定表。首次创建日程时如果没有显式 `cal_id`，会优先查这里，没有则自动创建并写回 |
+| 日程会议关联文件 | `--schedule-meeting-links-path` | `WECOM_SCHEDULE_MEETING_LINKS_PATH` | 否 | 脚本维护的 `schedule_id -> meeting_id` 本地关联表，用于在日程创建后继续补建会议并保持一对一追踪 |
 | 操作者标识 | `--operator-id` | 无 | 强烈建议 | 写入审计日志的人或自动化服务标识 |
 | 审计日志路径 | `--audit-log-path` | `WECOM_AUDIT_LOG_PATH` | 强烈建议 | 保存可审计事件的 JSONL 文件路径 |
 
@@ -110,7 +111,7 @@
 2. 返回 `ready` 时，再调用 `create-schedule`
 3. 返回 `needs_confirmation` 时，先让用户确认组织或成员
 4. 日程创建成功后，默认单独追问是否要创建会议
-5. 用户确认后，再调用 `create-meeting`
+5. 用户确认后，再调用 `create-meeting`，并优先传入刚创建日程返回的 `schedule_id`
 
 ## 日历相关输入
 

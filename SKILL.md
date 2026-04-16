@@ -172,7 +172,8 @@ python scripts/wecom_schedule_manager.py send-reminder \
 2. 如果返回 `status=ready`，再执行 `create-schedule`
 3. 如果返回 `status=needs_confirmation`，先把候选组织和样本成员给用户确认
 4. 日程创建成功后，默认再追问一次“是否需要创建会议？”
-5. 只有用户确认后，才执行 `create-meeting`
+5. 只有用户确认后，才执行 `create-meeting`，并优先带上刚创建日程返回的 `schedule_id`
+6. 如果这条 `schedule_id` 已经关联过会议，优先返回现有会议关联，不要重复创建第二个会议
 
 ## 决策点
 
@@ -240,6 +241,7 @@ Use these rules in the skill/orchestration layer even when the script stays gene
 6. Treat schedule and meeting as one-to-one at the conversation level, but schedule is mandatory and meeting is optional.
 7. After the schedule is created, ask once: "是否需要基于这个日程继续创建会议？"
 8. Only create a meeting when the user explicitly confirms they want one. Otherwise do not create a meeting.
+9. When the user confirms meeting creation, prefer reusing the just-created `schedule_id` so the meeting can be linked back to that schedule in logs and local context.
 
 ### Drafting Rule
 

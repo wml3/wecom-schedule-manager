@@ -254,13 +254,15 @@ python scripts/wecom_schedule_manager.py prepare-schedule-create \
 
 ## 会议追加创建
 
-创建日程后，脚本默认不会自动创建会议，而是建议继续追问一次“是否需要创建会议？”。
+创建日程后，脚本默认不会自动创建会议，而是建议带上刚创建的 `schedule_id` 继续追问一次“是否需要创建会议？”。
+如果该 `schedule_id` 已经关联过会议，脚本会直接返回已有关联，避免同一条日程被重复建会。
 
 如果用户确认需要会议，再单独执行：
 
 ```bash
 python scripts/wecom_schedule_manager.py create-meeting \
   --channel wecom \
+  --schedule-id "<just_created_schedule_id>" \
   --user-id "<organizer_userid>" \
   --start "2026-04-16 15:00:00" \
   --end "2026-04-16 15:30:00" \
@@ -281,6 +283,7 @@ python scripts/wecom_schedule_manager.py create-meeting \
 6. 日程创建成功后，再问一次：
    `是否需要基于这个日程继续创建会议？`
 7. 用户没有明确表达需要会议时，不要创建会议
+8. 用户确认需要会议时，优先复用刚创建日程返回的 `schedule_id`，让会议与日程形成一条可追踪关联
 
 ## 文档入口
 
