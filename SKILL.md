@@ -16,10 +16,10 @@ description: 通过企业微信 API 严格管理企业日历、日程、提醒�
 5. 执行目标日程操作。
 6. 返回 API 结果和审计日志路径。
 
-在收集参数前先阅读 [configuration.md](./references/configuration.md)。
+在收集参数前先阅读 [user-manual.md](./references/user-manual.md)。
 在选择接口或流程前阅读 [api-scenarios.md](./references/api-scenarios.md)。
 在检查合规和日志内容时阅读 [audit-model.md](./references/audit-model.md)。
-在为非技术用户或新租户做接入时阅读 [getting-started.md](./references/getting-started.md)。
+在为非技术用户或新租户做接入时阅读 [user-manual.md](./references/user-manual.md)。
 
 ## 必须遵守的规则
 

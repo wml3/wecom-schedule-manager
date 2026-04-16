@@ -1,25 +1,39 @@
-# User Manual
+﻿# 用户手册
 
-## 1. 概述
+## 1. 这是什么
 
-`wecom-schedule-manager` 用于通过企业微信开放接口管理企业微信自建应用下的日历和日程，支持：
+`wecom-schedule-manager` 是一个面向 Codex / OpenClaw 的企业微信日程管理 Skill。  
+它通过企业微信开放接口，帮助你完成这些事情：
 
-- 解析企业微信用户
-- 创建日历
-- 查询、创建、更新、取消日程
-- 批量解析和维护参会人
-- 创建后补建会议
+- 解析企业微信用户身份
+- 创建和管理企业微信日历
+- 创建、查询、更新、取消日程
+- 按部门或组织批量添加参会人
+- 在日程创建后补建会议
 - 记录审计日志
 
-它更适合“对话式助理”或“自动化流程”场景，而不是通用个人日历工具。
+它适合“助理帮你安排日程”这类自动化场景，不是一个通用个人日历工具。
 
-## 2. 安装要求
+## 2. 适用范围
 
-需要：
+适合：
+
+- 企业微信自建应用
+- 需要留痕和可审计的日程流程
+- 需要先识别组织、再一次性创建完整日程的场景
+
+不适合：
+
+- 邮件、短信、飞书、钉钉等非企业微信渠道
+- 统一管理多个平台的会议系统
+- 管理其他应用或员工手工创建的普通日程
+
+## 3. 安装
+
+运行环境需要：
 
 - Python 3
 - `requests`
-- 可访问企业微信开放接口的网络环境
 
 安装依赖：
 
@@ -33,25 +47,26 @@ Windows：
 py -m pip install requests
 ```
 
-## 3. 接入前准备
+## 4. 初始化准备
 
-在企业微信管理后台准备：
+在正式使用前，请先在企业微信后台准备好：
 
 - `CorpID`
 - 自建应用 `AgentID`
 - 自建应用 `Secret`
 - 应用可见范围
-- 如启用了来源 IP 限制，还需要当前执行环境的出口 IP
+
+如果企业微信启用了来源 IP 限制，还需要把当前机器的公网出口 IP 加入可信 IP 白名单。
 
 常见报错：
 
 - `60020 not allow to access from your ip`
 
-这说明当前出口 IP 不在可信 IP 白名单中。
+这通常不是代码问题，而是当前出口 IP 没有加白。
 
-## 4. 关键配置
+## 5. 关键配置
 
-建议长期配置这些变量：
+建议长期配置这些环境变量：
 
 - `WECOM_CORP_ID`
 - `WECOM_CORP_SECRET`
@@ -74,20 +89,15 @@ py -m pip install requests
 - `logs/wecom_calendar_bindings.json`
 - `logs/wecom_schedule_meeting_links.json`
 
-## 5. 使用边界
+## 6. 第一次接入怎么做
 
-这个 skill 主要管理：
+推荐按这个顺序初始化：
 
-- 当前企业微信自建应用创建的日历
-- 当前应用创建的日历下的日程
-
-通常不适合：
-
-- 读取企业内所有历史日程
-- 管理其他应用创建的日程
-- 管理员工在客户端手工创建的普通日程
-
-## 6. 快速开始
+1. 配置 `WECOM_CORP_ID`、`WECOM_CORP_SECRET`、`WECOM_AGENT_ID`
+2. 先用一个已知用户验证 `resolve-user`
+3. 如果还没有日历，先创建一个日历
+4. 记下返回的 `cal_id`
+5. 再开始创建和管理正式日程
 
 ### 6.1 配置环境变量
 
@@ -141,11 +151,11 @@ python scripts/wecom_schedule_manager.py create-calendar \
   --operator-id assistant
 ```
 
-创建后请保存返回的 `cal_id`。
-
-## 7. 日程使用细节
+## 7. 怎么使用
 
 ### 7.1 创建日程
+
+最基本的创建方式：
 
 ```bash
 python scripts/wecom_schedule_manager.py create-schedule \
@@ -169,7 +179,7 @@ python scripts/wecom_schedule_manager.py create-schedule \
 - 参会人预检查
 - `cal_id` 解析
 
-如果组织不够明确，会先返回候选组织供确认。
+如果组织不够明确，会先返回候选组织供确认，再决定是否正式创建。
 
 ### 7.3 批量添加团队成员
 
@@ -185,7 +195,7 @@ python scripts/wecom_schedule_manager.py create-schedule \
   --attendee-department-name "示例团队"
 ```
 
-按组织路径：
+按组织路径预览：
 
 ```bash
 python scripts/wecom_schedule_manager.py preview-department-attendees \
@@ -194,7 +204,7 @@ python scripts/wecom_schedule_manager.py preview-department-attendees \
   --preview-limit 5
 ```
 
-按自然语言短语：
+按自然语言组织短语预览：
 
 ```bash
 python scripts/wecom_schedule_manager.py preview-department-attendees \
@@ -203,9 +213,9 @@ python scripts/wecom_schedule_manager.py preview-department-attendees \
   --preview-limit 5
 ```
 
-### 7.4 更新、取消、维护参会人
+### 7.4 更新、取消和维护参会人
 
-支持：
+支持这些动作：
 
 - `update-schedule`
 - `cancel-schedule`
@@ -214,7 +224,7 @@ python scripts/wecom_schedule_manager.py preview-department-attendees \
 
 这些动作都基于 `schedule_id` 执行。
 
-## 8. 会议补建流程
+### 7.5 会议补建
 
 默认策略是：
 
@@ -234,21 +244,30 @@ python scripts/wecom_schedule_manager.py create-meeting \
 
 说明：
 
-- 如果 `schedule_id` 已经关联过会议，脚本会直接返回已有会议关联
+- 如果该 `schedule_id` 已经关联过会议，脚本会直接返回已有会议关联
 - 这样可以避免同一条日程重复建会
 
-## 9. 用户级 `cal_id` 自动绑定
+## 8. 两个自动绑定能力
+
+### 8.1 用户级 `cal_id` 自动绑定
 
 支持“用户首次使用时自动建日历，后续自动复用”的模式：
 
 1. 先解析用户身份
 2. 查本地 `userid -> cal_id` 绑定
-3. 若不存在，则在创建日程时自动创建日历
+3. 如果不存在，则在创建日程时自动创建日历
 4. 写回绑定文件
 
-这适合“不同用户使用不同日历容器”的场景。
+### 8.2 日程与会议关联绑定
 
-## 10. 中文输入建议
+支持“先创建日程，再确认创建会议”的闭环：
+
+1. 创建日程时记录 `schedule_id`
+2. 创建会议时优先复用这条 `schedule_id`
+3. 写回 `schedule_id -> meeting_id`
+4. 后续再次触发时可识别是否已经建过会
+
+## 9. 中文输入建议
 
 为了避免终端乱码，建议优先使用：
 
@@ -259,7 +278,7 @@ python scripts/wecom_schedule_manager.py create-meeting \
 - `--location-file`
 - `--attendees-file`
 
-推荐直接复用模板：
+推荐直接复用这些模板：
 
 - `assets/request-templates/create-schedule-request.json`
 - `assets/request-templates/create-schedule-request-path.json`
@@ -267,34 +286,38 @@ python scripts/wecom_schedule_manager.py create-meeting \
 - `assets/request-templates/prepare-schedule-create-request.json`
 - `assets/request-templates/create-meeting-request.json`
 
-## 11. 常见问题
+## 10. FAQ
 
-### 11.1 `60020 not allow to access from your ip`
+### 10.1 `60020 not allow to access from your ip`
 
 原因：当前出口 IP 不在企业微信可信 IP 白名单中。
 
-### 11.2 `90457 invalid calendar id`
+### 10.2 `90457 invalid calendar id`
 
-原因通常是：
+常见原因：
 
 - `cal_id` 为空
 - `cal_id` 无效
 - `cal_id` 属于别的企业或别的应用
 
-### 11.3 企业微信里能看到日程，但 skill 查不到
+### 10.3 企业微信里能看到日程，但 skill 查不到
 
 通常是因为：
 
 - 该日程不在当前应用的日历下
 - 该日程不是由当前应用创建
 
-### 11.4 标题或描述出现乱码
+### 10.4 姓名解析失败或重名
 
-优先改用 UTF-8 文件输入，不要直接在终端里拼长中文参数。
+这是预期限制，不是脚本异常。  
+更稳妥的方式是直接使用：
 
-## 12. 补充文档
+- `userid`
+- 手机号
+- 邮箱
 
-- [配置说明](./configuration.md)
-- [快速接入](./getting-started.md)
-- [API 场景映射](./api-scenarios.md)
-- [审计模型](./audit-model.md)
+如果必须按姓名解析，建议配合 `--name-department-id` 缩小范围。
+
+### 10.5 标题或描述出现乱码
+
+优先改用 UTF-8 文件输入，不要直接在终端里拼接长中文参数。

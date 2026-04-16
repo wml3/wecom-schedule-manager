@@ -1,9 +1,9 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """
 企业微信日程管理命令行工具。
 
 本脚本不会内置真实租户参数。请通过命令行参数、环境变量或 UTF-8 请求
-文件提供运行时所需配置，具体说明见 references/configuration.md。
+文件提供运行时所需配置，具体说明见 references/user-manual.md。
 """
 
 from __future__ import annotations
@@ -2428,3 +2428,4 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+

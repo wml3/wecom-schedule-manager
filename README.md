@@ -28,7 +28,5 @@
 
 - [User Manual](./references/user-manual.md)
 - [Skill 说明](./SKILL.md)
-- [配置说明](./references/configuration.md)
-- [快速接入](./references/getting-started.md)
 - [API 场景映射](./references/api-scenarios.md)
 - [审计模型](./references/audit-model.md)
