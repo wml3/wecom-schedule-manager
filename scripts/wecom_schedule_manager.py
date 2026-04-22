@@ -153,7 +153,7 @@ class CalendarBindingStore:
     def _save(self) -> None:
         data = self._load()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8-sig")
 
     @staticmethod
     def _binding_key(corp_id: str, agent_id: str, user_id: str) -> str:
@@ -206,7 +206,7 @@ class ScheduleMeetingLinkStore:
     def _save(self) -> None:
         data = self._load()
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8-sig")
 
     @staticmethod
     def _context_key(corp_id: str, agent_id: str, schedule_id: str) -> str:
@@ -259,6 +259,15 @@ class ScheduleMeetingLinkStore:
         self._load()["schedule_contexts"][key] = existing
         self._save()
         return existing
+
+    def delete_schedule_context(self, *, corp_id: str, agent_id: str, schedule_id: str) -> bool:
+        key = self._context_key(corp_id, agent_id, schedule_id)
+        contexts = self._load()["schedule_contexts"]
+        if key not in contexts:
+            return False
+        del contexts[key]
+        self._save()
+        return True
 
 
 class WeComError(RuntimeError):
@@ -1163,7 +1172,7 @@ def extract_meeting_url(payload: Dict[str, Any]) -> Optional[str]:
 
 
 def extract_meeting_code(payload: Dict[str, Any]) -> Optional[str]:
-    value = find_first_value(payload, ("meeting_code", "meetingid", "meeting_id"))
+    value = find_first_value(payload, ("meeting_code",))
     return str(value) if value not in (None, "") else None
 
 
@@ -1257,6 +1266,19 @@ def apply_request_file(args: argparse.Namespace) -> argparse.Namespace:
         payload = json.loads(read_stdin_json_text())
     if payload is None:
         return args
+    request_aliases = {
+        "sender_user_id": "session_user_id",
+        "sender_mobile": "session_mobile",
+        "sender_email": "session_email",
+        "sender_name": "session_name",
+        "session_sender_user_id": "session_user_id",
+        "session_sender_mobile": "session_mobile",
+        "session_sender_email": "session_email",
+        "session_sender_name": "session_name",
+    }
+    for source_key, target_key in request_aliases.items():
+        if source_key in payload and target_key not in payload:
+            payload[target_key] = payload[source_key]
     if "attendee_names" in payload and "attendee_names_json" not in payload:
         payload["attendee_names_json"] = payload["attendee_names"]
     if "attendee_department_path_json" in payload and "attendee_department_path" not in payload:
@@ -1373,6 +1395,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mobile", help="用于解析 userid 的手机号。")
     parser.add_argument("--email", help="用于解析 userid 的邮箱地址。")
     parser.add_argument("--name", help="用于精确解析 userid 的姓名。")
+    parser.add_argument("--session-user-id", help="企业微信会话发送人的 userid。缺少组织者时可作为默认组织者。")
+    parser.add_argument("--session-mobile", help="企业微信会话发送人的手机号。缺少组织者时可作为默认组织者。")
+    parser.add_argument("--session-email", help="企业微信会话发送人的邮箱。缺少组织者时可作为默认组织者。")
+    parser.add_argument("--session-name", help="企业微信会话发送人的姓名。缺少组织者时可作为默认组织者。")
     parser.add_argument(
         "--name-department-id",
         type=int,
@@ -1493,13 +1519,41 @@ def resolve_department_root_id(args: argparse.Namespace) -> int:
 
 def resolve_primary_user(client: WeComClient, args: argparse.Namespace) -> Optional[Dict[str, Any]]:
     if args.user_id or args.mobile or args.email or args.name:
-        return client.resolve_user(
+        resolved = client.resolve_user(
             user_id=args.user_id,
             mobile=args.mobile,
             email=args.email,
             name=args.name,
             name_department_id=resolve_name_department_id(args),
         )
+        resolved["source"] = "explicit"
+        return resolved
+    if args.session_user_id or args.session_mobile or args.session_email or args.session_name:
+        resolved = client.resolve_user(
+            user_id=args.session_user_id,
+            mobile=args.session_mobile,
+            email=args.session_email,
+            name=args.session_name,
+            name_department_id=resolve_name_department_id(args),
+        )
+        resolved["source"] = "session_sender"
+        resolved["is_session_sender_fallback"] = True
+        client.audit.append(
+            "user.resolve.session_sender_fallback",
+            {
+                "used": True,
+                "session_lookup_fields": compact_payload(
+                    {
+                        "user_id": args.session_user_id,
+                        "mobile": args.session_mobile,
+                        "email": args.session_email,
+                        "name": args.session_name,
+                    }
+                ),
+                "resolved_userid": resolved.get("userid"),
+            },
+        )
+        return resolved
     return None
 
 
@@ -1908,6 +1962,8 @@ def prepare_schedule_create(
         department_resolution["attendees"],
         default_userid=user_id,
     )
+    can_auto_create_calendar = not bool(calendar_context["effective_cal_id"]) and bool(user_id)
+    missing_calendar_context = not bool(calendar_context["effective_cal_id"]) and not bool(user_id)
     inferred_copy = infer_schedule_copy(
         summary=args.summary,
         description=args.description,
@@ -1916,6 +1972,45 @@ def prepare_schedule_create(
         attendee_count=len(explicit_attendees),
         start=args.start,
     )
+    if missing_calendar_context:
+        return {
+            "request_id": client.audit.request_id,
+            "channel": "wecom",
+            "status": "needs_confirmation",
+            "reason": "missing_calendar_context",
+            "resolved_user": resolved_user,
+            "effective_cal_id": calendar_context["effective_cal_id"],
+            "calendar_binding": calendar_context["binding_record"],
+            "calendar_resolution": {
+                "source": calendar_context["source"],
+                "effective_cal_id": calendar_context["effective_cal_id"],
+                "bindings_path": str(binding_store.path),
+                "will_auto_create_on_create": can_auto_create_calendar,
+                "needs_organizer_or_cal_id": True,
+            },
+            "resolved_attendee_sources": {
+                "names": resolved_name_attendees,
+                "department": department_resolution,
+            },
+            "attendee_count": len(explicit_attendees),
+            "sample_attendees": department_resolution.get("sample_users", [])[: args.preview_limit],
+            "draft_schedule": {
+                "summary": inferred_copy["summary"],
+                "description": inferred_copy["description"],
+                "location": args.location,
+                "start": args.start,
+                "end": args.end,
+                "attendees": explicit_attendees,
+            },
+            "copy_suggestion": {
+                "summary_inferred": inferred_copy["summary_inferred"],
+                "description_inferred": inferred_copy["description_inferred"],
+                "needs_confirmation": inferred_copy["needs_copy_confirmation"],
+                "next_prompt": inferred_copy["copy_follow_up"],
+            },
+            "next_prompt": "组织架构已经识别成功，但当前还没有可用日历。请补充组织者用户（userid / 手机号 / 邮箱 / 姓名），或预先配置 WECOM_CAL_ID 后再创建日程。",
+            "audit_log_path": str(client.audit.path),
+        }
     return {
         "request_id": client.audit.request_id,
         "channel": "wecom",
@@ -1927,7 +2022,8 @@ def prepare_schedule_create(
             "source": calendar_context["source"],
             "effective_cal_id": calendar_context["effective_cal_id"],
             "bindings_path": str(binding_store.path),
-            "will_auto_create_on_create": not bool(calendar_context["effective_cal_id"]) and bool(user_id),
+            "will_auto_create_on_create": can_auto_create_calendar,
+            "needs_organizer_or_cal_id": False,
         },
         "resolved_attendee_sources": {
             "names": resolved_name_attendees,
@@ -2122,6 +2218,11 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         user_id = (resolved_user or {}).get("userid")
         if not args.start or not args.end:
             raise SystemExit("create-schedule 需要提供 --start 和 --end。")
+        if not effective_cal_id and not user_id:
+            raise SystemExit(
+                "当前没有可用的 cal_id，也没有可解析的组织者用户，无法自动创建日历。"
+                " 请提供 --user-id、--mobile、--email 或 --name，或先配置 WECOM_CAL_ID。"
+            )
         attendees = merge_attendees(explicit_attendees, default_userid=user_id)
         schedule = {
             "start_time": parse_time(args.start),
@@ -2192,13 +2293,15 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         attendees = merge_attendees(explicit_attendees, default_userid=user_id)
         start_ts = parse_time(args.start)
         end_ts = parse_time(args.end)
-        duration_minutes = max(1, int((end_ts - start_ts) / 60))
+        if end_ts <= start_ts:
+            raise SystemExit("create-meeting 的结束时间必须晚于开始时间。")
+        duration_seconds = max(300, end_ts - start_ts)
         body = compact_payload(
             {
                 "admin_userid": user_id,
                 "title": args.summary or "企业微信会议",
                 "meeting_start": start_ts,
-                "meeting_duration": duration_minutes,
+                "meeting_duration": duration_seconds,
                 "description": args.description,
                 "location": args.location,
                 "agentid": client.agent_id,
@@ -2239,7 +2342,9 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         if not start_ts or not end_ts:
             raise SystemExit("create-meeting 需要提供 --schedule-id 对应的日程上下文，或显式提供 --start 和 --end。")
         attendees = merge_attendees(explicit_attendees, (schedule_context or {}).get("attendees"), default_userid=user_id)
-        duration_minutes = max(1, int((end_ts - start_ts) / 60))
+        if end_ts <= start_ts:
+            raise SystemExit("create-meeting 的结束时间必须晚于开始时间。")
+        duration_seconds = max(300, end_ts - start_ts)
         meeting_title = args.summary if args.summary is not None else (schedule_context or {}).get("summary") or "企业微信会议"
         meeting_description = args.description if args.description is not None else (schedule_context or {}).get("description")
         meeting_location = args.location if args.location is not None else (schedule_context or {}).get("location")
@@ -2248,7 +2353,7 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
                 "admin_userid": user_id,
                 "title": meeting_title,
                 "meeting_start": start_ts,
-                "meeting_duration": duration_minutes,
+                "meeting_duration": duration_seconds,
                 "description": meeting_description,
                 "location": meeting_location,
                 "agentid": client.agent_id,
@@ -2347,10 +2452,28 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
             }
         )
         payload = client.cancel_schedule(body)
+        context_removed = schedule_meeting_store.delete_schedule_context(
+            corp_id=client.corp_id,
+            agent_id=str(client.agent_id),
+            schedule_id=args.schedule_id,
+        )
+        client.audit.append(
+            "schedule.meeting_context.delete",
+            {
+                "schedule_id": args.schedule_id,
+                "links_path": str(schedule_meeting_store.path),
+                "context_removed": context_removed,
+            },
+        )
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
             "cancel_result": payload,
+            "schedule_context_cleanup": {
+                "schedule_id": args.schedule_id,
+                "links_path": str(schedule_meeting_store.path),
+                "context_removed": context_removed,
+            },
             "audit_log_path": str(client.audit.path),
         }
 

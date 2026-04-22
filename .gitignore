@@ -4,3 +4,4 @@ __pycache__/
 Thumbs.db
 .venv/
 .pytest_cache/
+logs/

@@ -1,7 +1,7 @@
-{
-  "user_id": "replace-with-organizer-userid",
+﻿{
+  "session_name": "会话发送人姓名",
   "summary": "团队沟通日程",
-  "description": "用于按部门直接创建日程的通用模板。",
+  "description": "用于按部门直接创建完整日程的通用模板。",
   "location": "线上会议",
   "start": "2026-04-16 15:00:00",
   "end": "2026-04-16 15:30:00",

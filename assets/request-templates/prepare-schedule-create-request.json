@@ -1,5 +1,5 @@
-{
-  "user_id": "replace-with-organizer-userid",
+﻿{
+  "session_name": "会话发送人姓名",
   "summary": "团队沟通日程",
   "description": "先做组织识别与参会人确认，再决定是否正式创建日程。",
   "location": "线上会议",

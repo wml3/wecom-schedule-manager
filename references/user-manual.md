@@ -82,6 +82,7 @@ py -m pip install requests
 - `WECOM_CAL_ID` 首次可以为空
 - `WECOM_CALENDAR_BINDINGS_PATH` 用于维护 `userid -> cal_id`
 - `WECOM_SCHEDULE_MEETING_LINKS_PATH` 用于维护 `schedule_id -> meeting_id`
+- 如果希望不同团队互不干扰，建议为每个团队或机器人维护独立 `WECOM_CAL_ID`
 
 默认本地文件：
 
@@ -161,6 +162,17 @@ python scripts/wecom_schedule_manager.py create-calendar \
 python scripts/wecom_schedule_manager.py create-schedule \
   --channel wecom \
   --user-id "<organizer_userid>" \
+  --start "2026-04-16 15:00:00" \
+  --end "2026-04-16 15:30:00" \
+  --summary "团队沟通日程"
+```
+
+如果当前请求来自企业微信会话，且没有单独提供组织者，也可以直接传会话发送人，脚本会默认把他识别为组织者：
+
+```bash
+python scripts/wecom_schedule_manager.py create-schedule \
+  --channel wecom \
+  --session-name "会话发送人姓名" \
   --start "2026-04-16 15:00:00" \
   --end "2026-04-16 15:30:00" \
   --summary "团队沟通日程"
@@ -246,6 +258,7 @@ python scripts/wecom_schedule_manager.py create-meeting \
 
 - 如果该 `schedule_id` 已经关联过会议，脚本会直接返回已有会议关联
 - 这样可以避免同一条日程重复建会
+- 会议开始时间建议使用未来时间；如果传入过去时间，企业微信通常会返回 `invalid meeting_start`
 
 ## 8. 两个自动绑定能力
 
@@ -266,6 +279,7 @@ python scripts/wecom_schedule_manager.py create-meeting \
 2. 创建会议时优先复用这条 `schedule_id`
 3. 写回 `schedule_id -> meeting_id`
 4. 后续再次触发时可识别是否已经建过会
+5. 取消日程时会同步清理本地关联上下文
 
 ## 9. 中文输入建议
 
@@ -321,3 +335,8 @@ python scripts/wecom_schedule_manager.py create-meeting \
 ### 10.5 标题或描述出现乱码
 
 优先改用 UTF-8 文件输入，不要直接在终端里拼接长中文参数。
+
+### 10.6 为什么取消日程后还要清理本地关联
+
+因为脚本会本地维护 `schedule_id -> meeting_id` 关系，方便后续补建会议时避免重复创建。  
+现在执行 `cancel-schedule` 时，脚本会自动移除对应的本地上下文，减少测试数据残留。

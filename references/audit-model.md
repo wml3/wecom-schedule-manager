@@ -1,37 +1,38 @@
-# 审计模型
+﻿# 审计模型
 
-当你需要实现或检查 skill 的审计要求时，请阅读本文件。
+当你需要实现、检查或排查这个 skill 的审计链路时，请参考本文件。
 
 ## 目标
 
 每一次企业微信操作，都应留下最小但可追溯的记录，至少能说明：
 
 1. 是谁发起了这次操作
-2. 解析出来的是哪个企业微信身份
+2. 最终解析到了哪个企业微信身份
 3. 调用了哪个 API 路径
 4. 影响了哪个业务对象
-5. 最终是成功还是失败
+5. 最终成功还是失败
 
 ## 存储格式
 
-脚本会把审计记录写入指定的 JSON Lines 文件。
+脚本把审计记录写入 JSON Lines 文件，每行一条记录。
 
-每一行包含这些字段：
+核心字段如下：
 
 | 字段 | 含义 |
 | --- | --- |
-| `timestamp` | 操作时间，Asia/Shanghai 时区的 ISO 格式 |
+| `timestamp` | 操作时间，Asia/Shanghai 时区 ISO 格式 |
 | `request_id` | 一次完整流程的关联 ID |
 | `channel` | 固定为 `wecom` |
 | `operator_id` | 发起操作的人或服务标识 |
-| `event_type` | 事件类型，例如 `user.resolve` 或 `schedule.create` |
-| `detail` | 脱敏后的请求和响应摘要 |
+| `event_type` | 事件类型，例如 `user.resolve`、`schedule.create` |
+| `detail` | 脱敏后的请求摘要和响应摘要 |
 
-## 必须记录的审计事件
+## 建议记录的事件
 
 - `token.fetch`
 - `user.resolve`
 - `user.resolve.detail`
+- `user.resolve.session_sender_fallback`
 - `calendar.create`
 - `schedule.list`
 - `schedule.get`
@@ -40,19 +41,32 @@
 - `schedule.cancel`
 - `schedule.add_attendees`
 - `schedule.del_attendees`
+- `schedule.meeting_context.write`
+- `schedule.meeting_context.lookup`
+- `schedule.meeting_context.delete`
+- `meeting.create`
 - `reminder.send`
 
 ## 脱敏规则
 
 - 不记录 `corp_secret`
 - 不记录 `access_token`
-- 保留返回的 `errcode` 和 `errmsg`
-- 在有帮助时保留 `schedule_id`、`cal_id`、解析出的 `userid` 和目标身份信息
+- 保留 `errcode` 和 `errmsg`
+- 在有帮助时保留 `userid`、`schedule_id`、`meeting_id`、`cal_id`
+- 不在公开文档或示例日志中保留真实姓名、真实企业 ID、真实手机号
 
-## 建议的审查方式
+## 审查建议
 
-1. 按 `request_id` 聚合整条流程
-2. 确认 `channel` 一直是 `wecom`
-3. 确认在写入日程之前已经完成用户解析
-4. 确认最终 API 响应成功
-5. 如果“解析出的身份”和“最终目标接收人”明显不一致，应升级处理
+1. 先按 `request_id` 串起整条链路
+2. 确认 `channel` 始终为 `wecom`
+3. 确认写操作前已经完成用户解析
+4. 确认最终 API 响应成功或有明确错误码
+5. 如果使用了会话发送人回退，检查 `user.resolve.session_sender_fallback`
+
+## 清理建议
+
+测试完成后建议：
+
+1. 取消测试日程
+2. 清理本地 `schedule_id -> meeting_id` 关联文件
+3. 保留必要的审计记录或按内部规范归档
