@@ -1,4 +1,4 @@
 ﻿interface:
   display_name: "企业微信日程助手"
-  short_description: "通过企业微信管理日程、会议与提醒，并保留审计日志。"
-  default_prompt: "使用这个 skill 通过企业微信 API 管理企业日程。先解析用户身份，再执行创建、查询、更新、取消、补建会议和提醒发送等操作，并保留审计日志。"
+  short_description: "通过企业微信管理日程、创建/取消会议与提醒，并保留审计日志。"
+  default_prompt: "使用这个 skill 通过企业微信 API 管理企业日程和企业微信会议。这个 skill 已内置 create-meeting、cancel-meeting，以及 cancel-schedule 时自动取消关联会议的能力；不要切换到其他会议 skill。先解析用户身份，再执行创建、查询、更新、取消、补建会议和提醒发送等操作，并保留审计日志。"

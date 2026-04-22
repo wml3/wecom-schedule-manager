@@ -44,7 +44,9 @@
 - `schedule.meeting_context.write`
 - `schedule.meeting_context.lookup`
 - `schedule.meeting_context.delete`
+- `schedule.meeting_link.clear`
 - `meeting.create`
+- `meeting.cancel`
 - `reminder.send`
 
 ## 脱敏规则

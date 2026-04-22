@@ -10,6 +10,7 @@
 - 创建、查询、更新、取消日程
 - 按部门或组织批量添加参会人
 - 在日程创建后补建会议
+- 单独取消会议，或在取消日程时自动取消关联会议
 - 记录审计日志
 
 它适合“助理帮你安排日程”这类自动化场景，不是一个通用个人日历工具。
@@ -231,6 +232,7 @@ python scripts/wecom_schedule_manager.py preview-department-attendees \
 
 - `update-schedule`
 - `cancel-schedule`
+- `cancel-meeting`
 - `add-attendees`
 - `del-attendees`
 
@@ -259,6 +261,28 @@ python scripts/wecom_schedule_manager.py create-meeting \
 - 如果该 `schedule_id` 已经关联过会议，脚本会直接返回已有会议关联
 - 这样可以避免同一条日程重复建会
 - 会议开始时间建议使用未来时间；如果传入过去时间，企业微信通常会返回 `invalid meeting_start`
+- 这个 skill 已经内置企业微信会议创建能力，不需要再切换到其他会议 skill
+
+### 7.6 取消会议和联动清理
+
+如果只是单独取消会议，可以直接执行：
+
+```bash
+python scripts/wecom_schedule_manager.py cancel-meeting \
+  --channel wecom \
+  --meeting-id "<meeting_id>"
+```
+
+如果会议是通过本 skill 基于某条日程创建的，也可以直接按 `schedule_id` 取消：
+
+```bash
+python scripts/wecom_schedule_manager.py cancel-meeting \
+  --channel wecom \
+  --schedule-id "<schedule_id>"
+```
+
+如果你要删除一条已经关联会议的日程，建议直接执行 `cancel-schedule`。  
+脚本会先取消关联会议，再取消日程，并清理本地 `schedule_id -> meeting_id` 关联。
 
 ## 8. 两个自动绑定能力
 
@@ -299,6 +323,7 @@ python scripts/wecom_schedule_manager.py create-meeting \
 - `assets/request-templates/create-schedule-request-department.json`
 - `assets/request-templates/prepare-schedule-create-request.json`
 - `assets/request-templates/create-meeting-request.json`
+- `assets/request-templates/cancel-meeting-request.json`
 
 ## 10. FAQ
 
@@ -340,3 +365,8 @@ python scripts/wecom_schedule_manager.py create-meeting \
 
 因为脚本会本地维护 `schedule_id -> meeting_id` 关系，方便后续补建会议时避免重复创建。  
 现在执行 `cancel-schedule` 时，脚本会自动移除对应的本地上下文，减少测试数据残留。
+
+### 10.7 为什么不要切到别的会议 skill
+
+因为这个 skill 已经内置企业微信会议创建和取消能力，而且会维护本地 `schedule_id -> meeting_id` 关联。  
+如果切到别的会议 skill，通常拿不到这层本地上下文，也无法保证和企业微信日程保持一致。

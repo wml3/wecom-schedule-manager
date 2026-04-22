@@ -12,7 +12,8 @@
 4. 创建、更新、取消日程
 5. 批量增删参会人
 6. 创建会议并与 `schedule_id` 建立关联
-7. 发送应用提醒消息
+7. 取消会议，并与本地 `schedule_id` 关联同步清理
+8. 发送应用提醒消息
 
 ## 重要限制
 
@@ -47,6 +48,7 @@
 | 增加参会人 | `POST /cgi-bin/oa/schedule/add_attendees` | 创建后补参会人 |
 | 移除参会人 | `POST /cgi-bin/oa/schedule/del_attendees` | 创建后删参会人 |
 | 创建会议 | `POST /cgi-bin/meeting/create` | 会议开始时间必须有效且通常为未来时间 |
+| 取消会议 | `POST /cgi-bin/meeting/cancel` | 可单独取消会议，也可在取消日程时联动调用 |
 | 发送应用提醒 | `POST /cgi-bin/message/send` | 通过企业微信应用发提醒，不走邮件或短信 |
 
 ## 场景建议
@@ -84,6 +86,15 @@
 2. 把 `schedule_id` 本地持久化
 3. 用户确认需要会议后，再执行 `create-meeting`
 4. 成功后写回 `schedule_id -> meeting_id`
+
+### 会议取消
+
+推荐顺序：
+
+1. 如果是通过本 skill 创建并已关联到日程的会议，优先按 `schedule_id` 找回会议
+2. 先调用 `meeting/cancel`
+3. 再清理本地 `schedule_id -> meeting_id` 关联
+4. 如果用户同时要求删除日程，直接使用 `cancel-schedule` 走联动清理
 
 ### 清理测试数据
 

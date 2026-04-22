@@ -260,6 +260,18 @@ class ScheduleMeetingLinkStore:
         self._save()
         return existing
 
+    def clear_meeting_link(self, *, corp_id: str, agent_id: str, schedule_id: str) -> Optional[Dict[str, Any]]:
+        key = self._context_key(corp_id, agent_id, schedule_id)
+        contexts = self._load()["schedule_contexts"]
+        existing = contexts.get(key)
+        if not existing:
+            return None
+        existing.pop("meeting_link", None)
+        existing["updated_at"] = iso_now()
+        contexts[key] = existing
+        self._save()
+        return existing
+
     def delete_schedule_context(self, *, corp_id: str, agent_id: str, schedule_id: str) -> bool:
         key = self._context_key(corp_id, agent_id, schedule_id)
         contexts = self._load()["schedule_contexts"]
@@ -1073,6 +1085,15 @@ class WeComClient:
             audit_event="meeting.create",
         )
 
+    def cancel_meeting(self, body: Dict[str, Any]) -> Dict[str, Any]:
+        return self._request(
+            "POST",
+            "/meeting/cancel",
+            params=self._authed_params(),
+            json_body=body,
+            audit_event="meeting.cancel",
+        )
+
 
 def parse_attendees(attendees_json: Optional[str], default_userid: Optional[str]) -> List[Dict[str, str]]:
     attendees = parse_json(attendees_json, [])
@@ -1356,6 +1377,7 @@ def build_parser() -> argparse.ArgumentParser:
             "preview-department-attendees",
             "create-schedule",
             "create-meeting",
+            "cancel-meeting",
             "update-schedule",
             "cancel-schedule",
             "add-attendees",
@@ -1415,6 +1437,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--end")
     parser.add_argument("--schedule-id")
     parser.add_argument("--schedule-ids", help="用于 get-schedule 的多个日程 ID，逗号分隔。")
+    parser.add_argument("--meeting-id", help="企业微信会议 ID。取消会议时可显式提供。")
     parser.add_argument("--touser", help="提醒消息接收人，例如 user1|user2")
     parser.add_argument("--content", help="提醒消息正文。")
     parser.add_argument("--content-file", help="提醒消息正文对应的 UTF-8 文本文件。")
@@ -1830,7 +1853,6 @@ def resolve_schedule_context_for_meeting(
     )
     if schedule_context:
         return schedule_context
-
     fetched_context = fetch_schedule_context_from_remote(
         client,
         schedule_id=args.schedule_id,
@@ -1839,6 +1861,29 @@ def resolve_schedule_context_for_meeting(
     if not fetched_context:
         return None
     return persist_schedule_context(client, store, schedule_context=fetched_context, source="remote_lookup")
+
+
+def resolve_linked_meeting_context(
+    client: WeComClient,
+    args: argparse.Namespace,
+    schedule_meeting_store: ScheduleMeetingLinkStore,
+) -> Optional[Dict[str, Any]]:
+    if not args.schedule_id:
+        return None
+    schedule_context = schedule_meeting_store.get(
+        corp_id=client.corp_id,
+        agent_id=str(client.agent_id),
+        schedule_id=args.schedule_id,
+    )
+    client.audit.append(
+        "schedule.meeting_context.lookup",
+        {
+            "schedule_id": args.schedule_id,
+            "links_path": str(schedule_meeting_store.path),
+            "context_found": bool(schedule_context),
+        },
+    )
+    return schedule_context
 
 
 def merged_update_schedule(
@@ -2420,6 +2465,38 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
             "audit_log_path": str(client.audit.path),
         }
 
+    if args.action == "cancel-meeting":
+        schedule_context = resolve_linked_meeting_context(client, args, schedule_meeting_store)
+        linked_meeting = (schedule_context or {}).get("meeting_link") or {}
+        meeting_id = args.meeting_id or linked_meeting.get("meeting_id")
+        if not meeting_id:
+            raise SystemExit("cancel-meeting 需要提供 --meeting-id，或提供已关联会议的 --schedule-id。")
+        payload = client.cancel_meeting({"meetingid": meeting_id})
+        cleared_context = None
+        if args.schedule_id:
+            cleared_context = schedule_meeting_store.clear_meeting_link(
+                corp_id=client.corp_id,
+                agent_id=str(client.agent_id),
+                schedule_id=args.schedule_id,
+            )
+            client.audit.append(
+                "schedule.meeting_link.clear",
+                {
+                    "schedule_id": args.schedule_id,
+                    "meeting_id": meeting_id,
+                    "links_path": str(schedule_meeting_store.path),
+                    "context_found": bool(schedule_context),
+                    "meeting_link_cleared": bool(cleared_context),
+                },
+            )
+        return {
+            "request_id": client.audit.request_id,
+            "channel": "wecom",
+            "meeting_cancel_result": payload,
+            "schedule_context": cleared_context,
+            "audit_log_path": str(client.audit.path),
+        }
+
     if args.action == "update-schedule":
         if not args.schedule_id:
             raise SystemExit("update-schedule 需要提供 --schedule-id。")
@@ -2444,6 +2521,12 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
     if args.action == "cancel-schedule":
         if not args.schedule_id:
             raise SystemExit("cancel-schedule 需要提供 --schedule-id。")
+        schedule_context = resolve_linked_meeting_context(client, args, schedule_meeting_store)
+        linked_meeting = (schedule_context or {}).get("meeting_link") or {}
+        meeting_cancel_payload = None
+        linked_meeting_id = linked_meeting.get("meeting_id")
+        if linked_meeting_id:
+            meeting_cancel_payload = client.cancel_meeting({"meetingid": linked_meeting_id})
         body = compact_payload(
             {
                 "schedule_id": args.schedule_id,
@@ -2468,6 +2551,7 @@ def run_action(args: argparse.Namespace) -> Dict[str, Any]:
         return {
             "request_id": client.audit.request_id,
             "channel": "wecom",
+            "meeting_cancel_result": meeting_cancel_payload,
             "cancel_result": payload,
             "schedule_context_cleanup": {
                 "schedule_id": args.schedule_id,
